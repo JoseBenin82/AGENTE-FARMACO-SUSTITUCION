@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+data/chroma_db/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.DS_Store
+thumbs.db
+*.log

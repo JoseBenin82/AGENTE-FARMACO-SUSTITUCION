@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  farmabot:
+    build: .
+    container_name: farmabot
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
+      - STREAMLIT_SERVER_MAX_UPLOAD_SIZE=50
+    restart: unless-stopped
