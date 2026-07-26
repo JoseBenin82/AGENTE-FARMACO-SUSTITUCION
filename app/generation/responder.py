@@ -41,6 +41,13 @@ class LLMResponder:
             from openai import OpenAI
             from app.config import OLLAMA_BASE_URL
             self._client = OpenAI(base_url=f"{OLLAMA_BASE_URL}/v1", api_key="ollama")
+        elif self._provider == "openrouter":
+            from openai import OpenAI
+            from app.config import OPENROUTER_API_KEY, OPENROUTER_BASE_URL
+            self._client = OpenAI(
+                base_url=OPENROUTER_BASE_URL,
+                api_key=OPENROUTER_API_KEY,
+            )
 
     def generate(
         self,
@@ -75,6 +82,8 @@ class LLMResponder:
                 respuesta = self._call_anthropic(system_prompt, query)
             elif self._provider == "ollama":
                 respuesta = self._call_ollama(system_prompt, query)
+            elif self._provider == "openrouter":
+                respuesta = self._call_openai(system_prompt, query)
             else:
                 respuesta = self.mock.generate(query, context)
         except Exception as e:
