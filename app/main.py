@@ -1,85 +1,78 @@
-import streamlit as st
 import sys
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import (
-    LLM_PROVIDER,
-    EMBEDDING_MODEL,
-    TOP_K_RETRIEVAL,
-    SIMILARITY_THRESHOLD,
-)
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from app.config import TOP_K_RETRIEVAL
 from app.retrieval.vector_store import VectorStore
 from app.retrieval.reranker import Reranker
 from app.generation.responder import LLMResponder
 
-st.set_page_config(
-    page_title="FarmaBot - Agente de Sustitución Farmacéutica",
-    page_icon="💊",
-    layout="wide",
-)
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = VectorStore()
-if "reranker" not in st.session_state:
-    st.session_state.reranker = Reranker()
-if "responder" not in st.session_state:
-    st.session_state.responder = LLMResponder()
-if "llm_provider" not in st.session_state:
-    st.session_state.llm_provider = LLM_PROVIDER
-if "embedding_model" not in st.session_state:
-    st.session_state.embedding_model = EMBEDDING_MODEL
+vector_store = None
+reranker = None
+responder = None
 
-def process_query(query: str):
-    vector_store = st.session_state.vector_store
-    reranker = st.session_state.reranker
-    responder = st.session_state.responder
 
-    with st.spinner("🔍 Buscando en documentos..."):
-        candidates = vector_store.search(
-            query, n_results=TOP_K_RETRIEVAL
-        )
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global vector_store, reranker, responder
+    vector_store = VectorStore()
+    reranker = Reranker()
+    responder = LLMResponder()
+    yield
+
+
+app = FastAPI(title="FarmaBot API", lifespan=lifespan)
+
+static_dir = Path(__file__).resolve().parent / "static"
+static_dir.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+class ChatRequest(BaseModel):
+    query: str
+
+
+class ChatResponse(BaseModel):
+    response: str
+    sources: list[str]
+
+
+class StatsResponse(BaseModel):
+    total_chunks: int
+
+
+@app.get("/api/stats", response_model=StatsResponse)
+async def get_stats():
+    stats = vector_store.get_collection_stats()
+    return StatsResponse(total_chunks=stats.get("total_chunks", 0))
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest):
+    candidates = vector_store.search(req.query, n_results=TOP_K_RETRIEVAL)
 
     if not candidates:
-        respuesta = (
-            "No encontré información relevante en los documentos "
-            "disponibles para responder tu pregunta."
+        return ChatResponse(
+            response="No encontré información relevante en los documentos disponibles para responder tu pregunta.",
+            sources=[],
         )
-        fuentes = []
-    else:
-        with st.spinner("📊 Reclasificando resultados..."):
-            top_context = reranker.rerank(query, candidates)
 
-        with st.spinner("🤖 Generando respuesta..."):
-            respuesta, fuentes = responder.generate(query, top_context)
+    top_context = reranker.rerank(req.query, candidates)
+    respuesta, fuentes = responder.generate(req.query, top_context)
+    return ChatResponse(response=respuesta, sources=fuentes)
 
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": respuesta,
-        "sources": fuentes,
-    })
 
-st.title("💊 FarmaBot - Asistente de Sustitución Farmacéutica")
-st.caption(
-    "Consulta guías de equivalencia, protocolos de sustitución, "
-    "dosificación y más. Basado en documentación farmacéutica verificada."
-)
-
-from app.ui.chat_ui import render_chat_interface, render_sidebar
-
-try:
-    stats = st.session_state.vector_store.get_collection_stats()
-except Exception:
-    stats = {"total_chunks": 0}
-
-render_sidebar(stats)
-render_chat_interface()
-
-prompt = st.chat_input("Ej: ¿Qué alternativa hay para el medicamento Losartán si no hay stock?")
-if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    process_query(prompt)
-    st.rerun()
+@app.get("/")
+async def index():
+    index_file = static_dir / "index.html"
+    if not index_file.exists():
+        return {"error": "Frontend not found"}
+    return FileResponse(str(index_file))

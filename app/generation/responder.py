@@ -3,6 +3,16 @@ import re
 from typing import Optional
 from app.config import LLM_PROVIDER, SIMILARITY_THRESHOLD
 
+SYSTEM_PROMPT_TEMPLATE = (
+    "Eres un asistente corporativo de IA especializado en información "
+    "farmacéutica y de salud. Responde ÚNICAMENTE con base en el contexto "
+    "proporcionado. Si no encuentras la respuesta en el contexto, "
+    "dí: 'No encontré esta información en los documentos disponibles.' "
+    "Siempre cita la fuente (nombre del archivo y sección) de donde "
+    "obtuviste cada parte de la información.\n\n"
+    "Contexto:\n{context}"
+)
+
 class MockLLM:
     def generate(self, prompt: str, context: list[dict]) -> str:
         best = context[0] if context else None
@@ -17,79 +27,43 @@ class MockLLM:
             + ":\n\n"
             + f"{texto}\n\n"
             + "*Estoy funcionando en modo de demostración (MockLLM). "
-            + "Configura LLM_PROVIDER=openai o anthropic para respuestas completas.*"
+            + "Configura LLM_PROVIDER=openrouter para respuestas completas.*"
         )
         return respuesta
 
-class LLMResponder:
+class LangChainResponder:
     def __init__(self):
-        self.mock = MockLLM()
-        self._client = None
-        self._provider = LLM_PROVIDER
-        self._init_provider()
-
-    def _init_provider(self):
-        if self._provider == "openai":
-            from openai import OpenAI
-            from app.config import OPENAI_API_KEY
-            self._client = OpenAI(api_key=OPENAI_API_KEY)
-        elif self._provider == "anthropic":
-            from anthropic import Anthropic
-            from app.config import ANTHROPIC_API_KEY
-            self._client = Anthropic(api_key=ANTHROPIC_API_KEY)
-        elif self._provider == "ollama":
-            from openai import OpenAI
-            from app.config import OLLAMA_BASE_URL
-            self._client = OpenAI(base_url=f"{OLLAMA_BASE_URL}/v1", api_key="ollama")
-        elif self._provider == "openrouter":
-            from openai import OpenAI
-            from app.config import OPENROUTER_API_KEY, OPENROUTER_BASE_URL
-            self._client = OpenAI(
-                base_url=OPENROUTER_BASE_URL,
-                api_key=OPENROUTER_API_KEY,
-            )
-
-    def generate(
-        self,
-        query: str,
-        context: list[dict],
-        chat_history: Optional[list] = None,
-    ) -> tuple[str, list[str]]:
-        if self._provider == "mock":
-            respuesta = self.mock.generate(query, context)
-            fuentes = self._extract_sources(context)
-            return respuesta, fuentes
-        if not context or context[0].get("similitud", 0) < SIMILARITY_THRESHOLD:
-            return (
-                "No encontré información suficiente en los documentos "
-                "disponibles para responder tu pregunta.",
-                [],
-            )
-        contexto_texto = self._build_context(context)
-        system_prompt = (
-            "Eres un asistente corporativo de IA especializado en información "
-            "farmacéutica y de salud. Responde ÚNICAMENTE con base en el contexto "
-            "proporcionado. Si no encuentras la respuesta en el contexto, "
-            "dí: 'No encontré esta información en los documentos disponibles.' "
-            "Siempre cita la fuente (nombre del archivo y sección) de donde "
-            "obtuviste cada parte de la información.\n\n"
-            "Contexto:\n" + contexto_texto
+        from langchain_openai import ChatOpenAI
+        from langchain_core.prompts import ChatPromptTemplate
+        from langchain_core.output_parsers import StrOutputParser
+        from app.config import (
+            OPENROUTER_API_KEY, OPENROUTER_BASE_URL,
+            CHAT_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS,
         )
+        self._llm = ChatOpenAI(
+            model=CHAT_MODEL,
+            temperature=LLM_TEMPERATURE,
+            max_tokens=LLM_MAX_TOKENS,
+            api_key=OPENROUTER_API_KEY,
+            base_url=OPENROUTER_BASE_URL,
+            default_headers={
+                "HTTP-Referer": "https://github.com/JoseBenin82/AGENTE-FARMACO-SUSTITUCION",
+                "X-Title": "FarmaBot - Drug Substitution Agent",
+            },
+        )
+        self._prompt = ChatPromptTemplate.from_messages([
+            ("system", SYSTEM_PROMPT_TEMPLATE),
+            ("human", "{query}"),
+        ])
+        self._chain = self._prompt | self._llm | StrOutputParser()
+
+    def generate(self, query: str, context: list[dict]) -> str:
+        contexto_texto = self._build_context(context)
         try:
-            if self._provider == "openai":
-                respuesta = self._call_openai(system_prompt, query)
-            elif self._provider == "anthropic":
-                respuesta = self._call_anthropic(system_prompt, query)
-            elif self._provider == "ollama":
-                respuesta = self._call_ollama(system_prompt, query)
-            elif self._provider == "openrouter":
-                respuesta = self._call_openai(system_prompt, query)
-            else:
-                respuesta = self.mock.generate(query, context)
+            respuesta = self._chain.invoke({"context": contexto_texto, "query": query})
+            return respuesta.strip()
         except Exception as e:
-            respuesta = f"Error al generar respuesta: {str(e)}"
-        fuentes = self._extract_sources(context)
-        return respuesta, fuentes
+            return f"Error al generar respuesta con LangChain: {str(e)}"
 
     def _build_context(self, context: list[dict]) -> str:
         parts = []
@@ -104,37 +78,96 @@ class LLMResponder:
             parts.append(f"{fuente}\nContenido: {c['texto']}\n")
         return "\n---\n".join(parts)
 
-    def _call_openai(self, system_prompt: str, query: str) -> str:
-        from app.config import CHAT_MODEL
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query},
-        ]
-        response = self._client.chat.completions.create(
-            model=CHAT_MODEL, messages=messages, temperature=0.1
-        )
-        return response.choices[0].message.content.strip()
+class LLMResponder:
+    def __init__(self):
+        self.mock = MockLLM()
+        self._langchain = None
+        self._provider = LLM_PROVIDER
 
-    def _call_anthropic(self, system_prompt: str, query: str) -> str:
-        from app.config import CHAT_MODEL
-        response = self._client.messages.create(
-            model=CHAT_MODEL,
-            system=system_prompt,
-            messages=[{"role": "user", "content": query}],
-            max_tokens=1024,
-            temperature=0.1,
-        )
-        return response.content[0].text.strip()
+    def generate(
+        self,
+        query: str,
+        context: list[dict],
+        chat_history: Optional[list] = None,
+    ) -> tuple[str, list[str]]:
+        if self._provider == "mock":
+            respuesta = self.mock.generate(query, context)
+            fuentes = self._extract_sources(context)
+            return respuesta, fuentes
 
-    def _call_ollama(self, system_prompt: str, query: str) -> str:
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query},
-        ]
-        response = self._client.chat.completions.create(
-            model="llama3", messages=messages, temperature=0.1
-        )
-        return response.choices[0].message.content.strip()
+        if not context or context[0].get("similitud", 0) < SIMILARITY_THRESHOLD:
+            return (
+                "No encontré información suficiente en los documentos "
+                "disponibles para responder tu pregunta.",
+                [],
+            )
+
+        if self._provider == "openrouter":
+            if self._langchain is None:
+                self._langchain = LangChainResponder()
+            try:
+                respuesta = self._langchain.generate(query, context)
+            except Exception as e:
+                respuesta = f"Error al generar respuesta con LangChain: {str(e)}"
+        elif self._provider == "openai":
+            from openai import OpenAI
+            from app.config import OPENAI_API_KEY, CHAT_MODEL
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            contexto_texto = self._build_context_legacy(context)
+            response = client.chat.completions.create(
+                model=CHAT_MODEL,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(context=contexto_texto)},
+                    {"role": "user", "content": query},
+                ],
+                temperature=0.1,
+            )
+            respuesta = response.choices[0].message.content.strip()
+        elif self._provider == "anthropic":
+            from anthropic import Anthropic
+            from app.config import ANTHROPIC_API_KEY, CHAT_MODEL
+            client = Anthropic(api_key=ANTHROPIC_API_KEY)
+            contexto_texto = self._build_context_legacy(context)
+            response = client.messages.create(
+                model=CHAT_MODEL,
+                system=SYSTEM_PROMPT_TEMPLATE.format(context=contexto_texto),
+                messages=[{"role": "user", "content": query}],
+                max_tokens=1024,
+                temperature=0.1,
+            )
+            respuesta = response.content[0].text.strip()
+        elif self._provider == "ollama":
+            from openai import OpenAI
+            from app.config import OLLAMA_BASE_URL, CHAT_MODEL
+            client = OpenAI(base_url=f"{OLLAMA_BASE_URL}/v1", api_key="ollama")
+            contexto_texto = self._build_context_legacy(context)
+            response = client.chat.completions.create(
+                model=CHAT_MODEL,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(context=contexto_texto)},
+                    {"role": "user", "content": query},
+                ],
+                temperature=0.1,
+            )
+            respuesta = response.choices[0].message.content.strip()
+        else:
+            respuesta = self.mock.generate(query, context)
+
+        fuentes = self._extract_sources(context)
+        return respuesta, fuentes
+
+    def _build_context_legacy(self, context: list[dict]) -> str:
+        parts = []
+        for i, c in enumerate(context, 1):
+            meta = c["metadata"]
+            fuente = (
+                f"Fuente {i}: {meta.get('archivo', 'Desconocido')}"
+                + (f", Sección: {meta.get('seccion', '')}" if meta.get("seccion") else "")
+                + (f", Página: {meta.get('pagina', '')}" if meta.get("pagina") else "")
+                + (f", Categoría: {meta.get('categoria', '')}" if meta.get("categoria") else "")
+            )
+            parts.append(f"{fuente}\nContenido: {c['texto']}\n")
+        return "\n---\n".join(parts)
 
     def _extract_sources(self, context: list[dict]) -> list[str]:
         seen = set()

@@ -5,11 +5,15 @@ services:
     build: .
     container_name: farmabot
     ports:
-      - "8501:8501"
+      - "8000:8000"
     volumes:
       - ./data:/app/data
       - ./.env:/app/.env:ro
     environment:
-      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
-      - STREAMLIT_SERVER_MAX_UPLOAD_SIZE=50
+      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+      - CHAT_MODEL=${CHAT_MODEL:-openai/gpt-4o-mini}
+      - LLM_TEMPERATURE=0.1
+      - LLM_MAX_TOKENS=1024
     restart: unless-stopped
