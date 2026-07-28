@@ -15,7 +15,6 @@
 - [Arquitectura](#-arquitectura)
 - [Requisitos](#-requisitos)
 - [Instalación y Uso Local](#-instalación-y-uso-local)
-- [Despliegue en OCI](#-despliegue-en-oci)
 - [Estructura del Proyecto](#-estructura-del-proyecto)
 - [Documentos Soportados](#-documentos-soportados)
 - [API de Componentes](#-api-de-componentes)
@@ -282,58 +281,6 @@ Escribe `salir` para terminar el modo interactivo.
 | `No encontré información...` en todas las consultas | Documentos no indexados | Ejecuta `python scripts/index_documents.py` |
 | Primera consulta tarda ~30-40s | Inicialización de LangChain | Normal en el primer uso. Las siguientes consultas son rápidas. |
 | `Failed to fetch` en el navegador | Servidor aún iniciando o timeout por primera consulta | Espera ~40s y recarga la página |
-
----
-
-## ☁️ Despliegue en OCI
-
-### Opción 1: Docker Compose (recomendado)
-
-```bash
-# Construir y ejecutar
-docker-compose up --build -d
-```
-
-### Opción 2: OCI Compute + Docker
-
-1. Crear una instancia compute (VM.Standard.E2.1.Micro - siempre gratuito)
-2. Instalar Docker en la instancia
-3. Construir y ejecutar:
-
-```bash
-docker build -t farmabot .
-docker run -d -p 8000:8000 \
-  -v $(pwd)/data:/app/data \
-  -e LLM_PROVIDER=mock \
-  farmabot
-```
-
-4. Abrir el puerto 8000 en el Security List de OCI
-5. Acceder a `http://<IP_PUBLICA>:8000`
-
-### Opción 3: OCI Registry + Compute
-
-```bash
-# Autenticarse en OCI Registry
-docker login <region>.ocir.io
-
-# Taggear y subir imagen
-docker tag farmabot:latest <region>.ocir.io/<namespace>/farmabot:latest
-docker push <region>.ocir.io/<namespace>/farmabot:latest
-
-# En la instancia OCI
-docker pull <region>.ocir.io/<namespace>/farmabot:latest
-docker run -d -p 8000:8000 <region>.ocir.io/<namespace>/farmabot:latest
-```
-
-### Servicios OCI Utilizados
-
-- **Oracle Compute Instance**: Hosting de la aplicación
-- **OCI Registry (OCIR)**: Almacenamiento de imágenes Docker
-- **Virtual Cloud Network**: Red y seguridad
-
-> **Nota**: El proyecto usa ChromaDB como base de datos vectorial local (persistente en disco).
-> Para escala enterprise, se puede migrar a **OCI OpenSearch** o **Oracle Autonomous Database + pgvector**.
 
 ---
 
